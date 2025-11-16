@@ -1,14 +1,14 @@
 const express = require('express');
 const { stkPush: darajaStkPush } = require('../lib/daraja');
 const { getIo } = require('../socketManager'); // Use getIo to broadcast
-const { protect } = require('../middleware/auth');
+const { authOptional } = require('../middleware/authOptional'); // Import the new middleware
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 
 const router = express.Router();
 
 async function handleNewUserStkPush(req, res) {
-  const { name, email, password, phone, amount, socketId } = req.body;
+  const { name, email, password, phone, amount, socketId: socketId } = req.body;
   if (!name || !email || !password || !phone || !amount || !socketId) {
     return res.status(400).json({ message: 'Name, email, password, phone, amount, and socketId are required for registration.' });
   }
@@ -25,7 +25,7 @@ async function handleNewUserStkPush(req, res) {
 }
 
 async function handleExistingUserStkPush(req, res) {
-  const { phone, amount, socketId } = req.body;
+  const { phone, amount, socketId: socketId } = req.body;
   if (!phone || !amount || !socketId) {
     return res.status(400).json({ message: 'Phone, amount, and socketId are required.' });
   }
@@ -81,7 +81,7 @@ async function initiateStkPush(req, res, { phone, amount, userEmail, userDataFor
  * 2. Existing user payment (authenticated): requires phone, amount, socketId. It uses the logged-in user's ID.
  * POST /api/mpesa/stk-push
  */
-router.post('/stk-push', async (req, res) => {
+router.post('/stk-push', authOptional, async (req, res) => { // Apply the middleware here
   try {
     const isNewUser = !req.user; // Check if a user is logged in via 'protect' middleware
 
@@ -131,22 +131,18 @@ router.post('/callback', async (req, res) => {
         if (isNewUser) {
           // Create a new user
           const { name, email, password } = userData;
-          const existingUser = await User.findOne({ email });
-          if (existingUser) {
-            if (!existingUser.hasPaid) {
-              existingUser.hasPaid = true;
-              await existingUser.save();
-              console.log(`[DB] Payment confirmed. User ${email} has been updated to paid status.`);
-            } else {
-              console.log(`[DB] Payment confirmed for already-paid user: ${email}. No action needed.`);
-            }
-          } else {
-            const salt = await bcrypt.genSalt(10);
-            const hashedPassword = await bcrypt.hash(password, salt);
-            const newUser = new User({ name, email, password: hashedPassword, hasPaid: true });
-            await newUser.save();
+          let user = await User.findOne({ email });
+
+          if (!user) {
+            // If user does not exist, create them
+            user = new User({ name, email, password: password }); // Pass the plain password
             console.log(`[DB] User ${email} created successfully after payment.`);
           }
+
+          user.hasPaid = true;
+          await user.save();
+          console.log(`[DB] User ${email} is now marked as paid.`);
+
           io.to(socketId).emit('registration-success', { message: 'Payment successful! Your account has been created. You can now log in.', email: email });
         } else {
           // Update an existing user
@@ -172,7 +168,7 @@ router.post('/callback', async (req, res) => {
     } else {
       // Payment failed or was cancelled
       console.log(`[CALLBACK FAILURE] Payment failed for ${CheckoutRequestID}. ResultCode: ${ResultCode}, ResultDesc: ${ResultDesc}`);
-      io.to(socketId).emit('payment-failure', { message: `Payment not successful: ${ResultDesc}` });
+      io.to(socketId).emit(isNewUser ? 'registration-failure' : 'payment-failure', { message: `Payment not successful: ${ResultDesc}` });
       tempStore.delete(CheckoutRequestID); // Clean up on failure too
     }
 

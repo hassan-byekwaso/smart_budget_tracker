@@ -18,15 +18,28 @@ if (!callbackUrl) {
   process.exit(1); // Exit the process with an error code
 }
 
+let cachedToken = {
+  token: null,
+  expires: 0,
+};
+
 /**
  * Get Daraja OAuth access token
  */
 const getAccessToken = async () => {
+  // If we have a valid, non-expired token, use it
+  if (cachedToken.token && cachedToken.expires > Date.now()) {
+    return cachedToken.token;
+  }
+
   const auth = Buffer.from(`${consumerKey}:${consumerSecret}`).toString('base64');
   const url = 'https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials';
   try {
     const res = await axios.get(url, { headers: { Authorization: `Basic ${auth}` } });
-    return res.data.access_token;
+    const { access_token, expires_in } = res.data;
+    // Cache the new token and its expiry time (with a 10-second buffer)
+    cachedToken = { token: access_token, expires: Date.now() + (expires_in - 10) * 1000 };
+    return access_token;
   } catch (err) {
     console.error('Error getting access token:', err.response ? err.response.data : err.message);
     throw new Error('Could not get Daraja access token. Please check your consumer key and secret.');
@@ -41,8 +54,16 @@ const getAccessToken = async () => {
  */
 const stkPush = async ({ phone, amount, accountRef }) => {
   const token = await getAccessToken();
-  const timestamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
-  const password = Buffer.from(shortcode + passkey + timestamp).toString('base64');
+  // Generate timestamp in YYYYMMDDHHMMSS format
+  const date = new Date();
+  const timestamp =
+    date.getFullYear() +
+    ('0' + (date.getMonth() + 1)).slice(-2) +
+    ('0' + date.getDate()).slice(-2) +
+    ('0' + date.getHours()).slice(-2) +
+    ('0' + date.getMinutes()).slice(-2) +
+    ('0' + date.getSeconds()).slice(-2);
+  const password = Buffer.from(`${shortcode}${passkey}${timestamp}`).toString('base64');
 
   const body = {
     BusinessShortCode: shortcode,

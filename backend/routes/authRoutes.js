@@ -2,8 +2,6 @@
 // Register and login routes
 
 const express = require('express');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const { protect } = require('../middleware/auth');
 
@@ -14,9 +12,9 @@ const router = express.Router();
  * POST /api/auth/login
  * body: { email, password }
  */
-router.post('/login', async (req, res) => {
+router.post('/login', async (req, res) => { // Note: No bcrypt is needed here anymore
+  const { email, password } = req.body;
   try {
-    const { email, password } = req.body;
     console.log("Incoming login data:", req.body);
     if (!email || !password) {
       return res.status(400).json({ message: 'Email and password are required.' });
@@ -31,12 +29,13 @@ router.post('/login', async (req, res) => {
     }
     console.log('User found:', user.email);
 
-    const isMatch = await bcrypt.compare(password, user.password);
+    const isMatch = await user.matchPassword(password);
     if (!isMatch) {
       console.log(`Password mismatch for user: ${email}`);
       return res.status(400).json({ message: 'Invalid credentials' }); // Passwords don't match
     }
 
+    const jwt = require('jsonwebtoken');
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
     res.json({
